@@ -36,7 +36,7 @@ This project is the result of a deep analysis (Reverse Engineering) of Songsterr
 
 3.  Save (`Ctrl+S`) and enable the script.
 
-4.  Go to [Songsterr.com](https://www.songsterr.com).
+4.  Go to [Songsterr.com](https://www.songsterr.com) (works a lot better in private search !) .
 
 ---
 
