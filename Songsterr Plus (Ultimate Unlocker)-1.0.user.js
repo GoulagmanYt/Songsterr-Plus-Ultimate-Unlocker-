@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Songsterr Plus (Ultimate Unlocker)
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization. Works on Chrome, Edge, Firefox & Zen.
+// @version      1.4.1
+// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization. (Works on Zen Browser).
 // @author       Goulagman
 // @supportURL   https://github.com/GoulagmanYt/Songsterr-Plus-Ultimate-Unlocker-
 // @match        *://www.songsterr.com/*
