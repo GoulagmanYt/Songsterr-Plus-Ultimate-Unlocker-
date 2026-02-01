@@ -3,7 +3,8 @@
 // @namespace    http://tampermonkey.net/
 // @version      1.0
 // @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization.
-// @author       Etudiant Cyber
+// @author       Goulagman
+// @supportURL   https://github.com/GoulagmanYt/Songsterr-Plus-Ultimate-Unlocker-
 // @match        *://www.songsterr.com/*
 // @grant        unsafeWindow
 // @run-at       document-start
