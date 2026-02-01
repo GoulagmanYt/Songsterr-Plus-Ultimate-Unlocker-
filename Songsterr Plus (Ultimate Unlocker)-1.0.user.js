@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Songsterr Plus (Ultimate Unlocker)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization.(Using it in ZEN Browser private search works everytime)
+// @version      1.3
+// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization. Works on Chrome, Edge, Firefox & Zen.
 // @author       Goulagman
 // @supportURL   https://github.com/GoulagmanYt/Songsterr-Plus-Ultimate-Unlocker-
 // @match        *://www.songsterr.com/*
@@ -10,19 +10,19 @@
 // @run-at       document-start
 // @license      MIT
 // ==/UserScript==
+
 (function() {
     'use strict';
 
-    console.log("🛡️ Songsterr Unlocker - Active");
+    console.log("🛡️ Songsterr Unlocker - Active (Universal Mode)");
 
     // 1. PREVENTIVE CLEANUP
-    // Clears the application cache to ensure a clean state (prevents conflicts with old sessions)
     try { localStorage.removeItem('persist:root'); } catch(e) {}
 
+    // Cross-browser window reference
     const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
-    // THE "MAGIC" PROFILE (ID 100000000)
-    // This specific User ID is whitelisted by the server to allow downloads without a valid session cookie.
+    // THE "MAGIC" PROFILE
     const MAGIC_PROFILE = {
         id: 100000000,
         uid: 100000000,
@@ -40,13 +40,15 @@
     // ============================================
     // 2. NETWORK INTERCEPTION (The Core Logic)
     // ============================================
+    
+    // Save the original fetch immediately
     const originalFetch = targetWindow.fetch;
 
-    targetWindow.fetch = async function(resource, options) {
+    // Define the hooked fetch function
+    const hookedFetch = async function(resource, options) {
         let url = typeof resource === 'string' ? resource : (resource.url || "");
 
-        // --- A. PROFILE SPOOFING (Lying to the Interface) ---
-        // When the app asks "Who am I?", we answer "You are the Magic Plus User".
+        // --- A. PROFILE SPOOFING ---
         if (url.includes("/auth/profile")) {
             return new Response(JSON.stringify(MAGIC_PROFILE), {
                 status: 200,
@@ -54,21 +56,18 @@
             });
         }
 
-        // --- B. DOWNLOAD UNLOCK (The Critical Bypass) ---
-        // When the user clicks download, we must trick the server.
+        // --- B. DOWNLOAD UNLOCK ---
         if (url.includes("/api/edits/download")) {
             console.log("🔥 Download request intercepted - Anonymizing...");
 
-            // Clone the options to modify the request headers
             const newOptions = { ...options };
-
-            // CRITICAL STEP: Remove all credentials (cookies) and tokens.
-            // Sending the "Free Account" cookie causes a 401 error.
-            // Sending NO cookie forces the server to treat us as a Guest (which is allowed via the Magic ID).
+            
+            // Bypass Logic: Remove auth to force Guest mode on server side
             newOptions.credentials = 'omit';
-            delete newOptions.headers['Authorization'];
+            if (newOptions.headers) {
+                delete newOptions.headers['Authorization'];
+            }
 
-            // Ensure the body contains the Magic ID (server requirement for guests)
             if (newOptions.body) {
                 try {
                     let body = JSON.parse(newOptions.body);
@@ -77,26 +76,37 @@
                 } catch(e) {}
             }
 
-            // Dispatch the modified request using the native fetch
-            // We return the response DIRECTLY to the app.
-            // The app will see "200 OK" and trigger the file download natively.
             return originalFetch(resource, newOptions);
         }
 
         // --- C. LOG BLOCKING ---
-        // Silence Sentry and Analytics to keep the console clean
         if (url.match(/(sentry|logs|analytics|useraudio)/i)) {
             return new Response("{}", { status: 200 });
         }
 
-        // For everything else, proceed as normal
         return originalFetch(resource, options);
     };
 
+    // STEALTH MODE: Hide the fact that fetch is modified
+    // This is crucial for Chrome/Edge compatibility if the site checks integrity
+    hookedFetch.toString = () => originalFetch.toString();
+
+    // ROBUST INJECTION: Use defineProperty instead of simple assignment
+    // This ensures better compatibility with strict strict mode or read-only properties
+    try {
+        Object.defineProperty(targetWindow, 'fetch', {
+            value: hookedFetch,
+            writable: true,
+            configurable: true
+        });
+    } catch(e) {
+        // Fallback for older browsers
+        targetWindow.fetch = hookedFetch;
+    }
+
     // ============================================
-    // 3. STATE INJECTION (Initial Rendering)
+    // 3. STATE INJECTION
     // ============================================
-    // Modifies the JSON state embedded in the HTML to unlock the UI immediately upon load.
     const observer = new MutationObserver((mutations) => {
         const s = document.getElementById("state");
         if (s) {
@@ -105,7 +115,6 @@
                 if (!text) return;
                 let d = JSON.parse(text);
 
-                // Force the Magic Profile into the initial state
                 if (!d.user) d.user = {};
                 d.user.hasPlus = true;
                 d.user.isLoggedIn = true;
@@ -124,31 +133,26 @@
     // ============================================
     const style = document.createElement('style');
     style.innerHTML = `
-        /* Hide popups, ads, GDPR banners, and "Subscribe" overlays */
         section[data-consent="summary"], div[class*="Consent"],
         #onetrust-banner-sdk, [id*="ad-"], [class*="ad-"], div[id^="div-gpt-ad"],
         div[class*="Error"]
         { display: none !important; visibility: hidden !important; }
-
-        /* Restore scrolling and visibility */
+        
         body, html { overflow: auto !important; }
         #apptab { opacity: 1 !important; visibility: visible !important; }
     `;
     document.documentElement.appendChild(style);
 
-    // Maintenance loop for dynamically loaded elements
     setInterval(() => {
-        // Force "Plus" status for Printing
         const p = document.querySelector('[data-id^="Print--"]');
         if (p) p.setAttribute('data-id', 'Print--plus');
 
-        // Remove lock icons and enable disabled buttons
         document.querySelectorAll('button[disabled], svg use[href*="lock"]').forEach(el => {
             if (el.tagName.toLowerCase() === 'use') {
                 el.closest('svg')?.remove();
             } else {
                 el.removeAttribute('disabled');
-                el.classList.remove('Cny223'); // Greyed out class
+                el.classList.remove('Cny223');
                 el.style.pointerEvents = 'auto';
             }
         });
@@ -157,7 +161,6 @@
     // ============================================
     // 5. CONSOLE CLEANUP
     // ============================================
-    // Filter out expected errors (like AudioContext warnings or initial 401s)
     const origError = console.error;
     const filters = ["AudioContext", "source-map", "unreachable", "buffer", "Secure-YEC", "Aborted", "401"];
     console.error = function(...args) {
