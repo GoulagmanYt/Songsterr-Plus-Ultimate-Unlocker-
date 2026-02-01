@@ -1,6 +1,6 @@
 # 🎸 Songsterr Plus - Ultimate Unlocker
 
-> **An advanced Tampermonkey script that unlocks all Songsterr "Plus" features, including native download (.gp5), by exploiting a server-side logic flaw.**
+> **An advanced Tampermonkey script that unlocks all Songsterr "Plus" features, including native download (.gp5), by exploiting a server-side logic flaw. **
 
 ---
 
@@ -60,6 +60,10 @@ This script implements a two-step strategy to bypass this check:
 ---
 
 ## ⚠️ Disclaimer
+
+<span style="color:red">
+*This project as only been tested on ZEN Browser (firefox based) so MIDI and Guitar pro downloads can not work on other Browsers*
+</span>
 
 **This project is for educational and cybersecurity research purposes only :)**
 It aims to demonstrate logic vulnerabilities in server-side rights validation (Insecure Direct Object References / Broken Access Control).
