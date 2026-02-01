@@ -47,7 +47,7 @@ This script utilizes a local **Man-in-the-Middle (MITM)** technique via the brow
 ### The Problem (Why other scripts fail)
 Songsterr's server verifies session cookies during the file download process. If a free-tier user attempts to download a file (even with a patched UI), the server detects the "Free" session cookie and rejects the request with a `401 Unauthorized` error.
 
-### The Solution (V37 - The Native Flow)
+### The Solution
 This script implements a two-step strategy to bypass this check:
 
 1.  **Profile Injection (ID 100000000)**:
