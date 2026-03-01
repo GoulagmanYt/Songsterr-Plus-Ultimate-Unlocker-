@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Songsterr Plus (Ultimate Unlocker)
+// @name         Songsterr Plus
 // @namespace    http://tampermonkey.net/
-// @version      1.4.1
-// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5) by exploiting the Magic Guest Profile and server-side anonymization. (Works on Zen Browser).
+// @version      1.5
+// @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp5). (Tested on Zen Browser)
 // @author       Goulagman
 // @supportURL   https://github.com/GoulagmanYt/Songsterr-Plus-Ultimate-Unlocker-
 // @match        *://www.songsterr.com/*
@@ -14,7 +14,7 @@
 (function() {
     'use strict';
 
-    console.log("🛡️ Songsterr Unlocker - Active (Universal Mode)");
+    console.log("🛡️ songsterr Unlocker - Active (Universal Mode v1.5.0)");
 
     // 1. PREVENTIVE CLEANUP
     try { localStorage.removeItem('persist:root'); } catch(e) {}
@@ -22,11 +22,14 @@
     // Cross-browser window reference
     const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
+    // Generate a random ID to bypass the daily download limit (HTTP 429)
+    const RANDOM_MAGIC_ID = Math.floor(Math.random() * 900000000) + 100000000;
+
     // THE "MAGIC" PROFILE
     const MAGIC_PROFILE = {
-        id: 100000000,
-        uid: 100000000,
-        email: "plususer@songsterr.com",
+        id: RANDOM_MAGIC_ID,
+        uid: RANDOM_MAGIC_ID,
+        email: `plususer${RANDOM_MAGIC_ID}@songsterr.com`,
         name: "Plus User (Unlocked)",
         plan: "plus",
         hasPlus: true,
@@ -40,13 +43,15 @@
     // ============================================
     // 2. NETWORK INTERCEPTION (The Core Logic)
     // ============================================
-    
+
     // Save the original fetch immediately
     const originalFetch = targetWindow.fetch;
 
     // Define the hooked fetch function
     const hookedFetch = async function(resource, options) {
-        let url = typeof resource === 'string' ? resource : (resource.url || "");
+        // Determine if the resource is a String (URL) or a Request instance
+        let isRequestObj = typeof resource === 'object' && resource instanceof Request;
+        let url = isRequestObj ? resource.url : (resource || "");
 
         // --- A. PROFILE SPOOFING ---
         if (url.includes("/auth/profile")) {
@@ -58,25 +63,59 @@
 
         // --- B. DOWNLOAD UNLOCK ---
         if (url.includes("/api/edits/download")) {
-            console.log("🔥 Download request intercepted - Anonymizing...");
+            console.log(`🔥 Download request intercepted - Anonymizing with ID: ${RANDOM_MAGIC_ID}...`);
 
-            const newOptions = { ...options };
-            
-            // Bypass Logic: Remove auth to force Guest mode on server side
-            newOptions.credentials = 'omit';
-            if (newOptions.headers) {
-                delete newOptions.headers['Authorization'];
+            // 1. Initialize new options
+            let newOptions = { ...(options || {}) };
+            newOptions.credentials = 'omit'; // Omit cookies/credentials
+
+            // 2. Clean up headers properly (Compatible with the native Headers class)
+            let newHeaders = new Headers(newOptions.headers || (isRequestObj ? resource.headers : {}));
+            newHeaders.delete('Authorization');
+            newHeaders.delete('authorization');
+            newOptions.headers = newHeaders;
+
+            // 3. Extract the Body (from options or from the original Request object)
+            let reqBody = newOptions.body;
+            if (!reqBody && isRequestObj) {
+                // Clone the request to read its body without exhausting the original stream
+                reqBody = await resource.clone().blob();
             }
 
-            if (newOptions.body) {
+            // 4. Modify the JSON payload, handling GZIP compression if present
+            if (reqBody) {
                 try {
-                    let body = JSON.parse(newOptions.body);
-                    body.userId = 100000000;
-                    newOptions.body = JSON.stringify(body);
-                } catch(e) {}
+                    const isGzip = newHeaders.get('content-encoding') === 'gzip' || newHeaders.get('Content-Encoding') === 'gzip';
+
+                    if (isGzip) {
+                        // Decompress the GZIP body
+                        const ds = new DecompressionStream('gzip');
+                        const decompressedStream = new Response(reqBody).body.pipeThrough(ds);
+                        const text = await new Response(decompressedStream).text();
+
+                        let bodyJson = JSON.parse(text);
+                        bodyJson.userId = RANDOM_MAGIC_ID; // Apply the random Magic Guest ID
+
+                        // Recompress to GZIP
+                        const cs = new CompressionStream('gzip');
+                        const compressedStream = new Response(JSON.stringify(bodyJson)).body.pipeThrough(cs);
+                        newOptions.body = await new Response(compressedStream).blob();
+                    } else if (typeof reqBody === 'string') {
+                        // Case where it is not compressed (usually smaller tabs)
+                        let bodyJson = JSON.parse(reqBody);
+                        bodyJson.userId = RANDOM_MAGIC_ID; // Apply the random Magic Guest ID
+                        newOptions.body = JSON.stringify(bodyJson);
+                    }
+                } catch(e) {
+                    console.error("🛡️ Unlocker: Error while modifying the payload", e);
+                }
             }
 
-            return originalFetch(resource, newOptions);
+            // 5. Rebuild and send the final robust request
+            let reqUrl = isRequestObj ? resource.url : url;
+            let modifiedRequest = isRequestObj ? new Request(resource.clone(), newOptions) : new Request(reqUrl, newOptions);
+
+            return originalFetch(modifiedRequest);
         }
 
         // --- C. LOG BLOCKING ---
@@ -88,11 +127,9 @@
     };
 
     // STEALTH MODE: Hide the fact that fetch is modified
-    // This is crucial for Chrome/Edge compatibility if the site checks integrity
     hookedFetch.toString = () => originalFetch.toString();
 
-    // ROBUST INJECTION: Use defineProperty instead of simple assignment
-    // This ensures better compatibility with strict strict mode or read-only properties
+    // ROBUST INJECTION
     try {
         Object.defineProperty(targetWindow, 'fetch', {
             value: hookedFetch,
@@ -137,7 +174,7 @@
         #onetrust-banner-sdk, [id*="ad-"], [class*="ad-"], div[id^="div-gpt-ad"],
         div[class*="Error"]
         { display: none !important; visibility: hidden !important; }
-        
+
         body, html { overflow: auto !important; }
         #apptab { opacity: 1 !important; visibility: visible !important; }
     `;
