@@ -1,4 +1,4 @@
-# 🎸 Songsterr Ultimate (v3.1.0)
+# 🎸 Songsterr Ultimate (v3.0)
 
 > **A Tampermonkey userscript that unlocks all Songsterr Plus features and replaces the native export button with high-quality Guitar Pro 7 (.gp) and MIDI (.mid) downloaders built on alphaTab.**
 
