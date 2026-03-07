@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         🎸 Songsterr Ultimate
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.0.1
 // @description  Unlocks all Plus features (Speed, Loop, Solo) and Native Download (.gp7 and .midi). (Tested on Zen Browser)
 // @author       Goulagman
 // @supportURL   https://github.com/GoulagmanYt/Songsterr-Plus-Ultimate-Unlocker-
@@ -18,22 +18,24 @@
 (function () {
   'use strict';
 
-  console.log('🎸 Songsterr Ultimate — Actif v3.1.0');
+  console.log('🎸 Songsterr Ultimate — Active v3.1.0');
 
   // ═══════════════════════════════════════════════════════════════════
-  // 0. NETTOYAGE PRÉVENTIF
-  // Supprime l'état Redux mis en cache pour forcer une session propre
-  // et éviter que le profil "free" ne soit chargé depuis le localStorage.
+  // 0. PREVENTIVE CLEANUP
+  // Removes the cached Redux state to force a clean session and prevent
+  // the "free" profile from being loaded from localStorage on startup.
   // ═══════════════════════════════════════════════════════════════════
   try { localStorage.removeItem('persist:root'); } catch (e) {}
 
-  // Référence à la vraie fenêtre (contourne l'isolation Tampermonkey)
+  // Reference to the real window object (bypasses Tampermonkey's sandbox isolation)
   const targetWindow = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
 
   // ═══════════════════════════════════════════════════════════════════
-  // 1. PROFIL "MAGIQUE" PLUS
-  // ID aléatoire à chaque session pour contourner la limite de
-  // téléchargements journaliers (HTTP 429 Too Many Requests).
+  // 1. "MAGIC" PLUS PROFILE
+  // A random 9-digit ID is generated each session to bypass the server-
+  // side daily download quota (HTTP 429 Too Many Requests).
+  // The profile object mirrors exactly what Songsterr's /auth/profile
+  // endpoint returns for a real Plus subscriber.
   // ═══════════════════════════════════════════════════════════════════
   const MAGIC_ID = Math.floor(Math.random() * 900000000) + 100000000;
 
@@ -52,23 +54,27 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════
-  // 2. INTERCEPTION RÉSEAU
-  // On accroche fetch() très tôt (document-start) pour :
-  //   A. Renvoyer notre faux profil Plus sur /auth/profile
-  //   B. Bloquer les appels de logs/analytics/sentry (bruit inutile)
-  //   NOTE : on ne touche PAS à /api/edits/download — notre téléchargeur
-  //          GP7/MIDI est supérieur au .gp5 natif.
+  // 2. NETWORK INTERCEPTION
+  // We hook fetch() very early (document-start) to intercept two routes:
+  //   A. /auth/profile  → return our spoofed Plus profile so the React
+  //      app believes the user has an active subscription (unlocks
+  //      Speed, Loop, Solo controls in the UI).
+  //   B. sentry/logs/analytics/useraudio → silently swallow telemetry
+  //      requests to prevent tracking during our operations.
+  //
+  // NOTE: We do NOT intercept /api/edits/download — our GP7/MIDI
+  // downloader is superior to the native .gp5 export.
   // ═══════════════════════════════════════════════════════════════════
   const fetchOriginal = targetWindow.fetch;
 
   const fetchHooked = async function (resource, options) {
-    // Détermine si resource est un objet Request ou une simple URL string
+    // Determine whether resource is a Request object or a plain URL string
     const isReqObj = typeof resource === 'object' && resource instanceof Request;
     const url = isReqObj ? resource.url : (resource || '');
 
-    // --- A. USURPATION DE PROFIL ---
-    // Songsterr interroge cette route pour savoir si l'utilisateur a un abonnement.
-    // On renvoie notre profil "plus" forgé pour débloquer Speed, Loop, Solo.
+    // --- A. PROFILE SPOOFING ---
+    // Songsterr calls this endpoint to check subscription status.
+    // We respond with our forged Plus profile JSON.
     if (url.includes('/auth/profile')) {
       return new Response(JSON.stringify(MAGIC_PROFILE), {
         status : 200,
@@ -76,20 +82,22 @@
       });
     }
 
-    // --- B. BLOCAGE DES LOGS & ANALYTICS ---
-    // Évite d'envoyer des données de télémétrie pendant nos opérations.
+    // --- B. TELEMETRY BLOCKING ---
+    // Silently absorb outgoing analytics and error-logging requests.
     if (url.match(/(sentry|logs|analytics|useraudio)/i)) {
       return new Response('{}', { status: 200 });
     }
 
-    // Toutes les autres requêtes passent normalement
+    // All other requests pass through unchanged
     return fetchOriginal(resource, options);
   };
 
-  // Mode furtif : toString() renvoie l'original pour déjouer les détections
+  // Stealth mode: toString() returns the original function's source to
+  // defeat any integrity checks that compare fetch.toString().
   fetchHooked.toString = () => fetchOriginal.toString();
 
-  // Injection robuste avec Object.defineProperty pour survivre aux re-définitions
+  // Robust injection using Object.defineProperty so the hook survives
+  // any re-definition attempts by the page's own scripts.
   try {
     Object.defineProperty(targetWindow, 'fetch', {
       value      : fetchHooked,
@@ -97,14 +105,17 @@
       configurable: true
     });
   } catch (e) {
-    targetWindow.fetch = fetchHooked; // Fallback navigateurs anciens
+    targetWindow.fetch = fetchHooked; // Fallback for older browsers
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // 3. INJECTION D'ÉTAT DOM
-  // Songsterr stocke son état Redux dans <script id="state">.
-  // On observe le DOM dès que ce nœud apparaît et on y injecte
-  // hasPlus:true + notre profil pour que React "croie" qu'on est abonné.
+  // 3. DOM STATE INJECTION
+  // Songsterr stores its full Redux store as JSON inside
+  // <script id="state"> on every page. React reads this element during
+  // hydration to populate its initial state. We watch for the element
+  // with a MutationObserver and patch it before React reads it,
+  // injecting hasPlus:true and our fake profile so the app believes
+  // the user is subscribed from the very first render.
   // ═══════════════════════════════════════════════════════════════════
   const stateObserver = new MutationObserver(() => {
     const el = document.getElementById('state');
@@ -118,20 +129,20 @@
       data.user.hasPlus    = true;
       data.user.isLoggedIn = true;
       data.user.profile    = MAGIC_PROFILE;
-      // Supprime la bannière de consentement RGPD
+      // Suppress the GDPR/CCPA consent banner
       data.consent = { loading: false, suite: 'tcf', view: 'none' };
 
       const patched = JSON.stringify(data);
       if (el.textContent !== patched) el.textContent = patched;
-    } catch (e) { /* JSON invalide, on ignore */ }
+    } catch (e) { /* Invalid JSON, skip silently */ }
   });
   stateObserver.observe(document.documentElement, { childList: true, subtree: true });
 
   // ═══════════════════════════════════════════════════════════════════
-  // 4. CSS — Nettoyage UI + styles de nos boutons
+  // 4. CSS — UI CLEANUP + BUTTON STYLES
   // ═══════════════════════════════════════════════════════════════════
   GM_addStyle(`
-    /* ── Masque les éléments indésirables ─────────────────────────── */
+    /* ── Hide unwanted elements ────────────────────────────────────── */
     section[data-consent="summary"],
     div[class*="Consent"],
     #onetrust-banner-sdk,
@@ -144,14 +155,16 @@
     body, html { overflow: auto !important; }
     #apptab    { opacity: 1 !important; visibility: visible !important; }
 
-    /* ── Conteneur de nos boutons ──────────────────────────────────── */
+    /* ── Our button wrapper ─────────────────────────────────────────── */
+    /* Inherits B3a4pa / B3agq5 classes from the replaced #c-export div,
+       so vertical alignment inside the flex toolbar is automatic.      */
     #sgd-wrapper {
       display      : inline-flex;
       align-items  : center;
       gap          : 12px;
     }
 
-    /* ── Boutons GP7 & MIDI ────────────────────────────────────────── */
+    /* ── GP7 & MIDI buttons ─────────────────────────────────────────── */
     .sgd-btn {
       display      : inline-flex;
       align-items  : center;
@@ -175,7 +188,7 @@
     .sgd-btn-gp   { background: linear-gradient(135deg,#2563eb,#1d4ed8); color:#fff; }
     .sgd-btn-midi { background: linear-gradient(135deg,#1e293b,#0f172a); color:#fff; }
 
-    /* ── Toast de statut centré en bas ────────────────────────────── */
+    /* ── Status toast — centered at the bottom of the viewport ──────── */
     #sgd-status {
       position     : fixed;
       bottom       : 20px;
@@ -200,34 +213,32 @@
   `);
 
   // ═══════════════════════════════════════════════════════════════════
-  // 5. DÉVERROUILLAGE CIBLÉ DES FONCTIONNALITÉS PLUS
+  // 5. TARGETED PLUS FEATURE UNLOCK
   //
-  // ⚠️ PIÈGE CRITIQUE : on ne doit PAS retirer disabled sur TOUS les
-  // boutons désactivés de la page. Le player de tab Songsterr utilise
-  // des boutons disabled légitimement pendant son initialisation
-  // (chargement audio, parsing de la tab…). Si on les force à enabled,
-  // React perd la synchronisation entre son état interne et le DOM →
-  // la tab se gèle au premier chargement.
+  // ⚠️ CRITICAL PITFALL: We must NOT remove `disabled` from ALL buttons
+  // on the page. Songsterr's tab player legitimately uses `disabled`
+  // during its initialization phase (audio loading, tab parsing, etc.).
+  // Force-enabling those buttons desynchronizes React's internal state
+  // from the DOM → the tab freezes on first load.
   //
-  // Solution : on cible UNIQUEMENT les boutons verrouillés par le
-  // paywall Plus, identifiables par :
-  //   1. Présence d'une icône cadenas SVG (use[href*="lock"]) dans
-  //      le bouton ou son voisinage immédiat
-  //   2. Un data-id connu lié aux features Plus (Speed, Loop, Solo…)
-  //   3. La classe CSS spécifique du lock Songsterr (Cny223)
+  // Strategy: target ONLY buttons locked by the Plus paywall, which are
+  // identifiable by one of these three signals:
+  //   1. They contain a lock SVG icon  (use[href*="lock"])
+  //   2. Their data-id matches a known Plus feature name
+  //   3. They carry the Songsterr lock CSS class (Cny223)
   // ═══════════════════════════════════════════════════════════════════
 
-  // data-id des features connues du paywall Plus
+  // Known data-id values for Plus-gated features
   const PLUS_DATA_IDS = ['Speed', 'Loop', 'Solo', 'Autoscroll', 'Print'];
 
   setInterval(() => {
-    // ── 1. Forcer le mode impression "Plus" ──────────────────────────
+    // ── 1. Force print mode to "Plus" ────────────────────────────────
     const printEl = document.querySelector('[data-id^="Print--"]');
     if (printEl) printEl.setAttribute('data-id', 'Print--plus');
 
-    // ── 2. Supprimer les icônes cadenas SVG ──────────────────────────
-    // Ces <use href*="lock"> sont ajoutés par React sur les features Plus.
-    // On retire l'icône et on débloque le bouton parent uniquement.
+    // ── 2. Remove lock SVG icons ─────────────────────────────────────
+    // React adds <use href*="lock"> inside Plus-gated buttons.
+    // We remove the icon and re-enable only its direct button parent.
     document.querySelectorAll('svg use[href*="lock"]').forEach(use => {
       const svg    = use.closest('svg');
       const parent = svg?.closest('button');
@@ -239,9 +250,9 @@
       }
     });
 
-    // ── 3. Déverrouiller les boutons Plus par data-id ────────────────
-    // On ne touche QUE les boutons dont le data-id correspond à une
-    // feature connue du paywall — jamais les boutons du player.
+    // ── 3. Unlock Plus buttons by data-id ────────────────────────────
+    // We only touch buttons whose data-id matches a known paywall
+    // feature — never touching generic player controls.
     PLUS_DATA_IDS.forEach(id => {
       const el = document.querySelector(`[data-id*="${id}"]`);
       if (el && el.hasAttribute('disabled')) {
@@ -251,7 +262,7 @@
       }
     });
 
-    // ── 4. Débloquer les boutons portant la classe de lock Songsterr ──
+    // ── 4. Unlock any remaining buttons with Songsterr's lock class ──
     document.querySelectorAll('button.Cny223').forEach(btn => {
       btn.removeAttribute('disabled');
       btn.classList.remove('Cny223');
@@ -260,8 +271,8 @@
   }, 1000);
 
   // ═══════════════════════════════════════════════════════════════════
-  // 6. FILTRE CONSOLE
-  // Supprime les erreurs bruyantes et sans intérêt pour la console.
+  // 6. CONSOLE FILTER
+  // Suppress noisy, irrelevant errors that would pollute the console.
   // ═══════════════════════════════════════════════════════════════════
   const consoleErrorOrig = console.error;
   const CONSOLE_FILTERS  = ['AudioContext', 'source-map', 'unreachable', 'buffer', 'Secure-YEC', 'Aborted', '401'];
@@ -271,12 +282,15 @@
   };
 
   // ═══════════════════════════════════════════════════════════════════
-  // ▼▼▼ NOTRE TÉLÉCHARGEUR GP7 / MIDI ▼▼▼
+  // ▼▼▼  GP7 / MIDI DOWNLOADER  ▼▼▼
   // ═══════════════════════════════════════════════════════════════════
 
   // ───────────────────────────────────────────────────────────────────
-  // CDN SONGSTERR — En-têtes qui simulent Chrome pour passer la
-  // validation CloudFront (Origin + Referer sont obligatoires).
+  // CDN HEADERS
+  // Songsterr's tab data lives on a CloudFront CDN that validates the
+  // Origin and Referer headers. We spoof a Chrome browser signature so
+  // the CDN accepts the request. GM_xmlhttpRequest is required because
+  // the browser's fetch() would block these cross-origin requests.
   // ───────────────────────────────────────────────────────────────────
   const CDN_BASE = 'https://dqsljvtekg760.cloudfront.net';
 
@@ -297,20 +311,25 @@
   };
 
   // ───────────────────────────────────────────────────────────────────
-  // ÉTAPE 1 — Lire les métadonnées de la page
-  // Songsterr injecte toutes les infos dans <script id="state">.
-  // On en extrait : songId, revisionId, image, liste des pistes.
+  // STEP 1 — READ PAGE METADATA
+  // Songsterr embeds all song metadata as JSON inside <script id="state">
+  // (the same Redux store we patched in section 3). We extract:
+  //   songId     — numeric song identifier
+  //   revisionId — current revision of the tab
+  //   image      — CDN path segment used to build revision URLs
+  //   tracks     — array of track objects, each with a partId
+  //   title / artist — used for the output filename
   // ───────────────────────────────────────────────────────────────────
   function getStateFromPage() {
     const el = document.getElementById('state');
-    if (!el) throw new Error('Élément #state introuvable. Es-tu sur une page de tab ?');
+    if (!el) throw new Error('#state element not found. Are you on a Songsterr tab page?');
     let parsed;
     try { parsed = JSON.parse(el.textContent || el.innerText); }
-    catch (e) { throw new Error('Impossible de parser le JSON de la page : ' + e.message); }
+    catch (e) { throw new Error('Failed to parse page JSON: ' + e.message); }
 
     const cur = parsed?.meta?.current;
     if (!cur?.songId || !cur?.revisionId || !cur?.image) {
-      throw new Error('Payload Songsterr incomplet (songId / revisionId / image manquants).');
+      throw new Error('Songsterr state payload is missing required fields (songId / revisionId / image).');
     }
     return {
       songId    : cur.songId,
@@ -323,9 +342,11 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // ÉTAPE 2 — Télécharger les JSONs de révision depuis le CDN
-  // URL : {CDN_BASE}/{songId}/{revisionId}/{image}/{partId}.json
-  // GM_xmlhttpRequest contourne les restrictions CORS du navigateur.
+  // STEP 2 — FETCH REVISION JSONs FROM THE CDN
+  // Each track's note data is stored as a separate JSON file on the CDN:
+  //   URL pattern: {CDN_BASE}/{songId}/{revisionId}/{image}/{partId}.json
+  // All tracks are fetched in parallel via Promise.all.
+  // GM_xmlhttpRequest is used to bypass the browser's CORS restrictions.
   // ───────────────────────────────────────────────────────────────────
   function fetchRevisionJson(url) {
     return new Promise((resolve, reject) => {
@@ -338,7 +359,7 @@
           if (res.status >= 200 && res.status < 300) resolve(res.response);
           else reject(new Error(`HTTP ${res.status} — ${url}`));
         },
-        onerror: err => reject(new Error(`Erreur réseau : ${JSON.stringify(err)}`))
+        onerror: err => reject(new Error(`Network error: ${JSON.stringify(err)}`))
       });
     });
   }
@@ -349,7 +370,7 @@
       .filter(t => typeof t.partId === 'number')
       .sort((a, b) => a.partId - b.partId);
 
-    if (validTracks.length === 0) throw new Error('Aucune piste valide dans les métadonnées.');
+    if (validTracks.length === 0) throw new Error('No valid tracks found in page metadata.');
 
     const results = await Promise.all(
       validTracks.map(async track => {
@@ -357,21 +378,23 @@
         try {
           return { trackMeta: track, revision: await fetchRevisionJson(url) };
         } catch (err) {
-          console.warn(`[SGD] Piste ${track.partId} ignorée :`, err.message);
+          console.warn(`[SGD] Skipping track ${track.partId}:`, err.message);
           return null;
         }
       })
     );
 
     const revisions = results.filter(Boolean);
-    if (revisions.length === 0) throw new Error('Aucune piste récupérée depuis le CDN.');
+    if (revisions.length === 0) throw new Error('Could not fetch any track data from the CDN.');
     return revisions;
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Durée Songsterr [num, den] → Duration alphaTab + dots
-  // Algorithme : minimisation du delta sur toutes les combinaisons
-  // (durée de base × 0, 1 ou 2 points de pointé).
+  // CONVERSION — Songsterr duration [num, den] → alphaTab Duration + dots
+  // Songsterr encodes durations as a fraction [numerator, denominator].
+  // alphaTab uses an enum (Whole=1, Half=2, Quarter=4…) plus a dot count.
+  // We find the best match by minimising the delta across all base
+  // durations combined with 0, 1, or 2 augmentation dots.
   // ───────────────────────────────────────────────────────────────────
   function mapDuration(dur) {
     const D     = alphaTab.model.Duration;
@@ -395,8 +418,9 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Tuplet entier → [numérateur, dénominateur]
-  // Exemples : 3 → [3,2], 5 → [5,4], 7 → [7,4]
+  // CONVERSION — Tuplet integer → [numerator, denominator]
+  // Examples: triplet 3 → [3,2], quintuplet 5 → [5,4], septuplet 7 → [7,4]
+  // For unlisted values, the denominator is the nearest lower power of 2.
   // ───────────────────────────────────────────────────────────────────
   function getTupletRatio(t) {
     const map = { 3:[3,2], 5:[5,4], 6:[6,4], 7:[7,4], 9:[9,8], 10:[10,8], 12:[12,8] };
@@ -406,8 +430,10 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — ID instrument Songsterr → programme MIDI + flags
-  // ID 1024 = batterie → channel MIDI 9 (spécification MIDI Standard)
+  // CONVERSION — Songsterr instrument ID → MIDI program + flags
+  // Instrument ID 1024 is Songsterr's code for drums/percussion.
+  // Percussion must be routed to MIDI channel 9 (General MIDI standard).
+  // All other IDs map directly to GM program numbers (clamped 0–127).
   // ───────────────────────────────────────────────────────────────────
   function mapInstrument(id) {
     if (id === 1024) return { program: 0, isPercussion: true };
@@ -416,14 +442,17 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Index d'articulation percussion
-  // Effectue un round-trip GP7 (export → import) pour construire une
-  // map stable des index, indépendante des versions d'alphaTab.
+  // CONVERSION — Percussion articulation index
+  // alphaTab assigns its own internal index to each percussion
+  // articulation. To get a stable mapping that survives version changes,
+  // we perform a GP7 round-trip: export a minimal percussion score then
+  // re-import it and read back the articulation array order.
+  // The resulting Map (MIDI note → index) is built once and cached.
   // ───────────────────────────────────────────────────────────────────
   let _percMap = null;
 
   function buildPercMap() {
-    // Crée un score minimal avec une piste de percussion vide
+    // Build a minimal score with one empty percussion track
     const score = new alphaTab.model.Score();
     const mb    = new alphaTab.model.MasterBar();
     score.addMasterBar(mb);
@@ -440,7 +469,7 @@
     voice.addBeat(beat); bar.addVoice(voice); staff.addBar(bar);
     score.addTrack(track);
 
-    // Export → re-import pour lire les articulations telles qu'alphaTab les indexe
+    // Export then re-import to read the articulation index order
     const settings  = new alphaTab.Settings();
     score.finish(settings);
     const data       = new alphaTab.exporter.Gp7Exporter().export(score, settings);
@@ -459,7 +488,7 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // TABLES DE CORRESPONDANCE
+  // LOOKUP TABLES
   // ───────────────────────────────────────────────────────────────────
   const VELOCITY_MAP = {
     ppp: alphaTab.model.DynamicValue.PPP,
@@ -482,9 +511,10 @@
   };
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Construction des mesures maîtresses (MasterBars)
-  // Gère : signatures rhythmiques, marqueurs de section, répétitions,
-  // fins alternatives et automations de tempo (BPM).
+  // CONVERSION — Build alphaTab MasterBars (global timeline)
+  // MasterBars hold the data shared across all tracks: time signatures,
+  // section markers, repeat brackets, and tempo automations (BPM).
+  // The track with the most measures is used as the master reference.
   // ───────────────────────────────────────────────────────────────────
   function buildMasterBars(score, masterRev, count) {
     let sigNum = 4, sigDen = 4;
@@ -493,14 +523,14 @@
       const m  = masterRev?.measures?.[i];
       const s  = m?.signature;
 
-      // Met à jour la signature si présente et valide
+      // Update time signature when a new one is present and valid
       if (Array.isArray(s) && s.length === 2 && s[0] && s[1]) [sigNum, sigDen] = s;
 
       const mb = new alphaTab.model.MasterBar();
       mb.timeSignatureNumerator   = sigNum;
       mb.timeSignatureDenominator = sigDen;
 
-      // Marqueur de section (ex : "Verse", "Chorus"…)
+      // Section marker (e.g. "Verse", "Chorus", "Bridge")
       if (m?.marker) {
         const text = typeof m.marker === 'string' ? m.marker : (m.marker?.text || '');
         const sec  = new alphaTab.model.Section();
@@ -508,14 +538,14 @@
         mb.section = sec;
       }
 
-      if (m?.repeatStart)                                            mb.isRepeatStart  = true;
-      if (typeof m?.repeatCount    === 'number' && m.repeatCount > 0)  mb.repeatCount    = m.repeatCount;
+      if (m?.repeatStart)                                                 mb.isRepeatStart    = true;
+      if (typeof m?.repeatCount    === 'number' && m.repeatCount > 0)    mb.repeatCount      = m.repeatCount;
       if (typeof m?.alternateEnding === 'number' && m.alternateEnding > 0) mb.alternateEndings = m.alternateEnding;
 
       score.addMasterBar(mb);
     }
 
-    // Automations de tempo — toujours en référence noire (index 2)
+    // Tempo automations — always referenced against a quarter note (index 2)
     const tempo = masterRev?.automations?.tempo;
     if (Array.isArray(tempo)) {
       for (const pt of tempo) {
@@ -530,16 +560,23 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Note Songsterr → alphaTab Note
-  // ★ Cordes : Songsterr 0 = corde la + haute, alphaTab 1 = la + basse
-  // ★ Bend   : Songsterr centièmes × 2 = quarts de ton (alphaTab)
+  // CONVERSION — Songsterr Note → alphaTab Note
+  //
+  // Two critical coordinate differences:
+  //   ★ STRING INDEX: Songsterr string 0 = highest-pitched string.
+  //     alphaTab string 1 = lowest-pitched string.
+  //     Formula: alphaTab.string = numStrings - songsterr.string
+  //
+  //   ★ BEND SCALE: Songsterr encodes bend points in hundredths of a
+  //     semitone. alphaTab uses quarter-tones.
+  //     Formula: alphaTab.tone = songsterr.tone × 2
   // ───────────────────────────────────────────────────────────────────
   function mapNote(nd, isPerc, numStrings) {
     const note  = new alphaTab.model.Note();
     note.string = isPerc ? 0 : numStrings - (nd.string ?? 0);
     note.fret   = nd.fret ?? 0;
 
-    // Index d'articulation pour la batterie
+    // Percussion notes use an articulation index instead of string/fret
     if (isPerc) note.percussionArticulation = getPercIndex(nd.fret ?? 0);
 
     if (nd.tie)         note.isTieDestination   = true;
@@ -552,7 +589,7 @@
     if (nd.wideVibrato)  note.vibrato = alphaTab.model.VibratoType.Wide;
     else if (nd.vibrato) note.vibrato = alphaTab.model.VibratoType.Slight;
 
-    // Harmonique
+    // Harmonic type
     if (nd.harmonic) {
       const ht = HARMONIC_MAP[nd.harmonic.toLowerCase()];
       if (typeof ht === 'number') {
@@ -561,7 +598,7 @@
       }
     }
 
-    // Slide (glissé)
+    // Slide type mapping
     if (nd.slide) {
       const s = nd.slide.toLowerCase();
       const Out = alphaTab.model.SlideOutType, In = alphaTab.model.SlideInType;
@@ -573,13 +610,13 @@
       else if (s === 'out_down' || s === 'downwards')    note.slideOutType = Out.OutDown;
     }
 
-    // Bend — ★ ×2 car Songsterr = centièmes de demi-ton, alphaTab = quarts de ton
+    // Bend — ★ multiply by 2: Songsterr hundredths → alphaTab quarter-tones
     if (nd.bend?.points?.length > 0) {
       note.bendType = alphaTab.model.BendType.Custom;
       for (const pt of nd.bend.points) {
         note.addBendPoint(new alphaTab.model.BendPoint(
           Math.round(pt.position),
-          Math.round(pt.tone * 2)  // ★ facteur ×2
+          Math.round(pt.tone * 2)  // ★ scale factor ×2
         ));
       }
     }
@@ -588,8 +625,9 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Beat Songsterr → alphaTab Beat
-  // Gère : durées, points, tuplets, dynamiques, vibrato, palm mute…
+  // CONVERSION — Songsterr Beat → alphaTab Beat
+  // Handles: durations, dots, tuplets, dynamics, pick stroke,
+  // beat-level vibrato, and palm mute.
   // ───────────────────────────────────────────────────────────────────
   function mapBeat(bd, masterBar, isPerc, numStrings) {
     const beat = new alphaTab.model.Beat();
@@ -601,7 +639,7 @@
 
     if (bd.text) beat.text = bd.text;
 
-    // Tuplet : on recalcule la durée de base depuis le champ `type`
+    // Tuplet: recompute base duration from the `type` denominator field
     if (typeof bd.tuplet === 'number' && bd.tuplet > 1) {
       const [n, d]    = getTupletRatio(bd.tuplet);
       beat.tupletNumerator   = n;
@@ -612,26 +650,26 @@
       }
     }
 
-    // Nuance dynamique
+    // Dynamic (velocity) level
     if (typeof bd.velocity === 'string') {
       const dyn = VELOCITY_MAP[bd.velocity.toLowerCase()];
       if (typeof dyn === 'number') beat.dynamics = dyn;
     }
 
-    // Sens du coup de médiator
+    // Pick stroke direction
     if (typeof bd.pickStroke === 'string') {
       const ps = bd.pickStroke.toLowerCase();
       if (ps === 'down') beat.pickStroke = alphaTab.model.PickStroke.Down;
       else if (ps === 'up') beat.pickStroke = alphaTab.model.PickStroke.Up;
     }
 
-    // Vibrato de beat
+    // Beat-level vibrato
     if (bd.wideVibrato || bd.vibratoWithTremoloBar) beat.vibrato = alphaTab.model.VibratoType.Wide;
     else if (bd.vibrato)                            beat.vibrato = alphaTab.model.VibratoType.Slight;
 
     if (bd.palmMute) beat.isPalmMute = true;
 
-    // Ajout des notes
+    // Add all notes to this beat
     for (const nd of (bd.notes || [])) {
       if (!nd.rest) beat.addNote(mapNote(nd, isPerc, numStrings));
     }
@@ -640,8 +678,9 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Remplir une voix vide par des silences
-  // Utilisé quand une mesure n'a aucun beat (mesure de silence totale).
+  // CONVERSION — Fill an empty voice with rest beats
+  // Used when a measure has no beat data (full-measure rest).
+  // One rest beat is added per beat of the time signature numerator.
   // ───────────────────────────────────────────────────────────────────
   function fillWithRests(voice, masterBar) {
     const num = masterBar.timeSignatureNumerator   || 4;
@@ -657,9 +696,12 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Construire une piste alphaTab complète
-  // Gère le tuning (ordre inversé Songsterr vs alphaTab), le channel
-  // MIDI percussion (9), et toutes les mesures.
+  // CONVERSION — Build a complete alphaTab Track
+  // Handles:
+  //   • Tuning: Songsterr stores strings high→low, alphaTab expects the
+  //     raw array as-is (the constructor handles the direction).
+  //   • Percussion: forced to MIDI channel 9 (GM standard).
+  //   • Measures: iterates all master bars; empty ones get rest voices.
   // ───────────────────────────────────────────────────────────────────
   function buildTrack(score, entry, masterBarCount, channel) {
     const { trackMeta, revision } = entry;
@@ -676,7 +718,7 @@
     const staff = new alphaTab.model.Staff();
     staff.isPercussion = isPerc;
 
-    // ★ Tuning : Songsterr stocke haut→bas, alphaTab attend bas→haut (on passe tel quel)
+    // ★ Tuning array passed as-is from Songsterr (high→low order)
     const tuning = revision.tuning || trackMeta.tuning;
     if (Array.isArray(tuning) && tuning.length > 0 && !isPerc) {
       staff.stringTuning = new alphaTab.model.Tuning('Custom', tuning, false);
@@ -714,9 +756,13 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // CONVERSION — Assembler le Score alphaTab complet
-  // La piste la plus longue sert de référence pour les MasterBars.
-  // Le channel 9 est réservé à la batterie (norme MIDI Général).
+  // CONVERSION — Assemble the complete alphaTab Score
+  // The track with the most measures is elected as the "master" track
+  // whose measure data drives MasterBar construction.
+  // MIDI channels 0–15 are assigned sequentially; channel 9 is always
+  // reserved for percussion (General MIDI specification).
+  // score.finish() is mandatory before any export — it finalises all
+  // internal cross-references within the score model.
   // ───────────────────────────────────────────────────────────────────
   function buildScore(meta, revisions) {
     const score   = new alphaTab.model.Score();
@@ -724,7 +770,7 @@
     score.artist  = meta.artist;
     score.tab     = 'Songsterr Ultimate v3';
 
-    // La piste avec le plus de mesures est la référence maîtresse
+    // Elect the track with the most measures as the master reference
     const masterRev = revisions.reduce((best, cur) =>
       (cur.revision?.measures?.length || 0) > (best.revision?.measures?.length || 0) ? cur : best
     ).revision;
@@ -735,28 +781,28 @@
 
     buildMasterBars(score, masterRev, masterBarCount);
 
-    // Attribution des channels MIDI (0–15, sauf 9 réservé batterie)
+    // Assign MIDI channels (0–15), skipping channel 9 for non-percussion
     let nextChannel = 0;
     for (const entry of revisions) {
       const id    = entry.trackMeta.instrumentId ?? entry.revision.instrumentId;
       const isPerc = id === 1024 || !!entry.trackMeta.isDrums;
       let channel;
       if (isPerc) {
-        channel = 9;
+        channel = 9; // GM spec: channel 9 is always percussion
       } else {
-        if (nextChannel === 9) nextChannel++; // Saute le channel 9 (batterie)
+        if (nextChannel === 9) nextChannel++; // Skip the reserved drum channel
         channel = nextChannel++;
       }
       buildTrack(score, entry, masterBarCount, channel);
     }
 
     const settings = new alphaTab.Settings();
-    score.finish(settings); // ★ Obligatoire — finalise les liaisons internes
+    score.finish(settings); // ★ Mandatory — finalises all internal linkage
     return { score, settings };
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // EXPORT GP7 — Renvoie un Uint8Array au format Guitar Pro 7 (.gp)
+  // EXPORT GP7 — Returns a Uint8Array in Guitar Pro 7 (.gp) format
   // ───────────────────────────────────────────────────────────────────
   function exportGP7(meta, revisions) {
     const { score, settings } = buildScore(meta, revisions);
@@ -764,7 +810,7 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // EXPORT MIDI — Renvoie un Uint8Array au format MIDI standard (.mid)
+  // EXPORT MIDI — Returns a Uint8Array in standard MIDI (.mid) format
   // ───────────────────────────────────────────────────────────────────
   function exportMIDI(meta, revisions) {
     const { score, settings } = buildScore(meta, revisions);
@@ -775,7 +821,8 @@
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // UTILITAIRE — Déclenche le téléchargement d'un Uint8Array
+  // UTILITY — Trigger a browser file download from a Uint8Array
+  // Creates a temporary object URL, clicks it, then revokes it.
   // ───────────────────────────────────────────────────────────────────
   function triggerDownload(bytes, fileName, mime) {
     const blob = new Blob([bytes], { type: mime });
@@ -788,13 +835,14 @@
     URL.revokeObjectURL(url);
   }
 
-  // Convertit le titre en nom de fichier sûr (pas de caractères spéciaux)
+  // Sanitize a title into a safe filename (no special characters)
   function safeName(str) {
     return str.replace(/[^a-zA-Z0-9 _\-]/g, '').trim().replace(/\s+/g, '_') || 'tab';
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // UI — Toast de statut centré en bas de l'écran
+  // UI — Status toast (centered bottom of viewport)
+  // Lazily created on first use, auto-hides after a given duration.
   // ───────────────────────────────────────────────────────────────────
   let _toastTimer = null;
   let _toast = null;
@@ -814,31 +862,33 @@
     t.className   = 'visible ' + type;
     clearTimeout(_toastTimer);
     if (duration > 0) {
-      _toastTimer = setTimeout(() => {
-        t.className = '';
-      }, duration);
+      _toastTimer = setTimeout(() => { t.className = ''; }, duration);
     }
   }
 
   // ───────────────────────────────────────────────────────────────────
-  // FLUX PRINCIPAL — appelé au clic sur l'un de nos boutons
-  // 4 étapes : lecture page → fetch CDN → conversion → téléchargement
+  // MAIN DOWNLOAD FLOW — triggered on button click
+  // Four sequential steps:
+  //   1. Read song metadata from the #state element
+  //   2. Fetch all revision JSONs from the CloudFront CDN
+  //   3. Convert to GP7 or MIDI via alphaTab
+  //   4. Trigger browser download
   // ───────────────────────────────────────────────────────────────────
   async function handleDownload(format, btnGP, btnMID) {
     btnGP.disabled  = true;
     btnMID.disabled = true;
-    showStatus('⏳ Lecture de la page…', '', 0);
+    showStatus('⏳ Reading page state…', '', 0);
 
     try {
-      // 1. Lire les métadonnées depuis #state
+      // Step 1 — extract metadata from #state
       const meta = getStateFromPage();
-      showStatus(`⏳ Récupération de ${meta.tracks.length} piste(s)…`, '', 0);
+      showStatus(`⏳ Fetching ${meta.tracks.length} track(s) from CDN…`, '', 0);
 
-      // 2. Télécharger tous les JSONs de révision depuis le CDN
+      // Step 2 — download all revision JSONs
       const revisions = await fetchAllRevisions(meta);
-      showStatus(`⚙️ Conversion de ${revisions.length} piste(s) → ${format.toUpperCase()}…`, '', 0);
+      showStatus(`⚙️ Converting ${revisions.length} track(s) → ${format.toUpperCase()}…`, '', 0);
 
-      // 3. Construire et exporter
+      // Step 3 — build and export
       const name = safeName(`${meta.artist} - ${meta.title}`);
       let bytes, fileName, mime;
 
@@ -852,12 +902,12 @@
         mime     = 'audio/midi';
       }
 
-      // 4. Déclencher le téléchargement navigateur
+      // Step 4 — trigger browser download
       triggerDownload(bytes, fileName, mime);
-      showStatus(`✅ "${fileName}" téléchargé !`, 'ok');
+      showStatus(`✅ "${fileName}" downloaded!`, 'ok');
 
     } catch (err) {
-      console.error('[SGD] Erreur :', err);
+      console.error('[SGD] Download failed:', err);
       showStatus(`❌ ${err.message}`, 'err', 7000);
     } finally {
       btnGP.disabled  = false;
@@ -866,35 +916,45 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // 7. INJECTION DES BOUTONS — Remplace le bouton d'export natif
+  // 7. BUTTON INJECTION — Replaces the native export button
   //
-  // Le bouton natif est dans : <div id="c-export" class="B3a4pa B3agq5">
-  // La barre est un flex container (.B3a1lv).
-  // On remplace le div#c-export entier par notre wrapper en lui
-  // donnant les mêmes classes B3a4pa + B3agq5 → centrage automatique.
+  // DOM structure (from reverse-engineering the page HTML):
+  //   <div id="c-export" class="B3a4pa B3agq5">   ← our injection target
+  //     <button id="control-export" ...>Export</button>
+  //   </div>
   //
-  // Résistance SPA : MutationObserver + hook pushState/popstate.
+  // The controls bar (.B3a1lv) is a flex container. Each item carries
+  // the classes B3a4pa + B3agq5 which handle vertical alignment.
+  // We replace the entire #c-export div and give our wrapper those same
+  // classes so it sits at exactly the same position in the bar.
+  //
+  // SPA resilience:
+  //   • Permanent MutationObserver: re-injects if #sgd-wrapper disappears
+  //     after a React re-render (e.g. switching Tab ↔ Chords view)
+  //   • history.pushState / replaceState / popstate hooks: detect SPA
+  //     navigation and schedule re-injection after React re-renders
   // ═══════════════════════════════════════════════════════════════════
 
+  // Only inject on tab/chords song pages, not on the homepage or artist pages
   function isTabPage() {
     return /\/a\/wsa\/.+/.test(location.pathname);
   }
 
   function createOurButtons() {
-    // On reprend les classes du conteneur natif pour hériter du layout flex
-    const wrapper    = document.createElement('div');
-    wrapper.id       = 'sgd-wrapper';
-    wrapper.className = 'B3a4pa B3agq5'; // classes du div#c-export original
+    // Reuse the native container's CSS classes for automatic flex alignment
+    const wrapper     = document.createElement('div');
+    wrapper.id        = 'sgd-wrapper';
+    wrapper.className = 'B3a4pa B3agq5'; // same classes as the replaced #c-export div
 
     const btnGP      = document.createElement('button');
     btnGP.className  = 'sgd-btn sgd-btn-gp';
     btnGP.innerHTML  = '🎸 GP7';
-    btnGP.title      = 'Télécharger Guitar Pro 7 (.gp)';
+    btnGP.title      = 'Download Guitar Pro 7 (.gp)';
 
     const btnMID     = document.createElement('button');
     btnMID.className = 'sgd-btn sgd-btn-midi';
     btnMID.innerHTML = '🎹 MIDI';
-    btnMID.title     = 'Télécharger MIDI (.mid)';
+    btnMID.title     = 'Download MIDI (.mid)';
 
     btnGP.addEventListener('click',  () => handleDownload('gp',   btnGP, btnMID));
     btnMID.addEventListener('click', () => handleDownload('midi', btnGP, btnMID));
@@ -907,48 +967,50 @@
   function tryInjectButtons() {
     if (!isTabPage()) return false;
 
-    // Déjà injecté et toujours dans le DOM → rien à faire
+    // Already injected and still connected to the DOM — nothing to do
     if (document.getElementById('sgd-wrapper')?.isConnected) return true;
 
-    // ── Cible principale : div#c-export (sélecteur stable) ───────────
+    // ── Primary target: #c-export (stable React ID) ──────────────────
     const cExport = document.getElementById('c-export');
     if (cExport) {
       cExport.replaceWith(createOurButtons());
-      console.log('[SGD] ✅ Injecté (#c-export)');
+      console.log('[SGD] ✅ Injected (#c-export)');
       return true;
     }
 
-    // ── Fallback : bouton #control-export ────────────────────────────
+    // ── Fallback 1: parent of #control-export button ─────────────────
     const ctrlExport = document.getElementById('control-export');
     if (ctrlExport) {
-      const parent = ctrlExport.closest('div') || ctrlExport.parentElement;
-      parent.replaceWith(createOurButtons());
-      console.log('[SGD] ✅ Injecté (#control-export parent)');
+      (ctrlExport.closest('div') || ctrlExport.parentElement).replaceWith(createOurButtons());
+      console.log('[SGD] ✅ Injected (#control-export parent)');
       return true;
     }
 
-    // ── Fallback : data-id ou title "Download" ────────────────────────
+    // ── Fallback 2: any element with a download-related title/data-id ─
     const nativeBtn = document.querySelector(
       '[data-id*="Download"], [data-id*="Export"], [title*="Download tab"]'
     );
     if (nativeBtn) {
-      const anchor = nativeBtn.closest('div') || nativeBtn.parentElement;
-      anchor.replaceWith(createOurButtons());
-      console.log('[SGD] ✅ Injecté (fallback title)');
+      (nativeBtn.closest('div') || nativeBtn.parentElement).replaceWith(createOurButtons());
+      console.log('[SGD] ✅ Injected (fallback title/data-id)');
       return true;
     }
 
-    return false;
+    return false; // Target not in DOM yet — will retry via MutationObserver
   }
 
-  // ── MutationObserver : ré-injecte si le wrapper est supprimé ───────
+  // Permanent MutationObserver: re-injects whenever #sgd-wrapper is
+  // removed from the DOM (React re-render after tab ↔ chords switch)
   const btnObserver = new MutationObserver(() => {
     if (!document.getElementById('sgd-wrapper')?.isConnected) {
       tryInjectButtons();
     }
   });
 
-  // ── Hook SPA ───────────────────────────────────────────────────────
+  // SPA navigation hook.
+  // React Router uses history.pushState to navigate without a page reload.
+  // We schedule three injection attempts with increasing delays to cover
+  // slow initial renders and lazy-loaded components.
   function onSpaNavigate() {
     setTimeout(tryInjectButtons, 300);
     setTimeout(tryInjectButtons, 900);
@@ -959,9 +1021,9 @@
   history.pushState   = function (...a) { _pushState(...a);     onSpaNavigate(); };
   const _replaceState = history.replaceState.bind(history);
   history.replaceState = function (...a) { _replaceState(...a); onSpaNavigate(); };
-  window.addEventListener('popstate', onSpaNavigate);
+  window.addEventListener('popstate', onSpaNavigate); // Back/Forward browser buttons
 
-  // ── Démarrage ──────────────────────────────────────────────────────
+  // Bootstrap
   function startObserving() {
     const go = () => {
       btnObserver.observe(document.body, { childList: true, subtree: true });
