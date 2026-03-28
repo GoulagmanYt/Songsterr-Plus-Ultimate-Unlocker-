@@ -1,11 +1,4 @@
-# 🎸 Songsterr Ultimate (v3.2.1)
-
-## ⚠️ ATTENTION – READ THIS BEFORE ANY DOWNLOAD
-
-```diff
-- ALWAYS refresh / reload the page before clicking any "Download MIDI" or "Download Guitar Pro" button
-- Otherwise you will get the file from the VERY FIRST tab you opened — NOT the one currently displayed
-```
+# 🎸 Songsterr Ultimate (v4.0.0)
 
 > **A Tampermonkey userscript that unlocks all Songsterr Plus features and replaces the native export button with high-quality Guitar Pro 7 (.gp) and MIDI (.mid) downloaders built on alphaTab.**
 
@@ -18,6 +11,8 @@
 - **MIDI download** — standard multi-track MIDI with correct General MIDI channel assignments
 - **YouTube Audio-Only mode** — Hide video while keeping audio playing (thanks to パプリカ!)
 - **Native Autoscroll fix** — Restores proper scrolling behavior (thanks to パプリカ!)
+- **Debug logging system** — Real-time operation logs for troubleshooting
+- **Memory management** — Intelligent cache cleanup to prevent memory leaks
 - **Ad & consent banner removal** — hides all promotional elements and the GDPR popup
 - **Smart Plus unlock** — targeted paywall unlock that never touches the player's own disabled buttons
 
@@ -27,7 +22,7 @@
 
 1. Install **Tampermonkey** for your browser: [Chrome](https://chrome.google.com/webstore/detail/tampermonkey/dhdgffkkebhmkfjojejmpbldmpobfkfo) · [Firefox](https://addons.mozilla.org/firefox/addon/tampermonkey/) · [Edge](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
 2. Open the Tampermonkey dashboard → **Create a new script**
-3. Paste the full content of `🎸 Songsterr Ultimate (Premium Unlocked)-3.2.1.user.js` and save (`Ctrl+S`)
+3. Paste the full content of `SongsterrUltimate.user.js` and save (`Ctrl+S`)
 4. Navigate to [songsterr.com](https://www.songsterr.com) — works best in a private window
 
 ---
@@ -83,9 +78,9 @@ A fresh random 9-digit user ID is generated **each session**. This prevents the 
 
 The profile perfectly mirrors what Songsterr's `/auth/profile` endpoint returns for real subscribers.
 
-#### Section 2 — Network Interception
+#### Section 2 — Robust Network Interception
 
-We replace the global `fetch` with our own function using `Object.defineProperty`:
+We replace the global `fetch` with a **protected hook** using `Object.defineProperty` with `writable: false` and `configurable: false` to prevent the page from redefining it:
 
 | Route | Action |
 |---|---|
@@ -93,9 +88,31 @@ We replace the global `fetch` with our own function using `Object.defineProperty
 | `sentry` / `logs` / `analytics` | Returns `{}` silently, blocking telemetry |
 | `/api/songs/*` / `/api/tab/*` | Caches revision data for our downloader |
 
-**Stealth:** `fetchHooked.toString()` returns the original function's source, defeating integrity checks.
+**Stealth features:**
+- `fetchHooked.toString()` returns the original function's source, defeating integrity checks
+- Protected with `Object.defineProperty` to survive any page-side redefinitions
+- Falls back gracefully for older browsers
 
-#### Section 3 — DOM State Injection
+#### Section 3 — Intelligent Memory Management
+
+To prevent memory leaks from accumulated cached data:
+
+```js
+const CACHE_SIZE_LIMIT = 50;
+function manageCacheSize() {
+  if (window.__SGD_REVISION_CACHE.size >= CACHE_SIZE_LIMIT) {
+    // Remove oldest 10 entries when limit reached
+    const entries = Array.from(window.__SGD_REVISION_CACHE.entries());
+    for (let i = 0; i < 10 && i < entries.length; i++) {
+      window.__SGD_REVISION_CACHE.delete(entries[i][0]);
+    }
+  }
+}
+```
+
+The revision cache automatically cleans up old entries to stay under the 50-song limit.
+
+#### Section 4 — DOM State Injection
 
 Songsterr uses server-side rendering. Before React boots, it writes the entire Redux state into:
 
@@ -113,7 +130,7 @@ data.consent = { loading: false, suite: 'tcf', view: 'none' }; // kills GDPR ban
 
 Result: React hydrates in Plus mode from its very first render, with zero flash of free content.
 
-#### Section 4 — Smart Plus Unlock
+#### Section 5 — Smart Plus Unlock
 
 This is the most delicate part. We use a `setInterval` that targets **only Plus-gated buttons**:
 
@@ -125,14 +142,51 @@ This is the most delicate part. We use a `setInterval` that targets **only Plus-
 2. **Known data-id values** — Plus features have predictable `data-id` attributes (`Speed`, `Loop`, `Solo`, `Print`)
 3. **Songsterr's lock class** — `Cny223` is the internal class for locked controls
 
+**Special handling:** The Autoscroll button is protected separately by パプリカ's fix (data-id renamed to `Auto-Scroll` to avoid conflicts with our setInterval).
+
 Player controls (Play, Metronome, navigation) have none of these signals, so they're never touched.
 
-#### Section 5 — The GP7/MIDI Downloader
+#### Section 6 — SPA Navigation & Race Condition Prevention
+
+Songsterr is a React SPA with dynamic navigation. We handle this with multiple resilience mechanisms:
+
+**Debounced injection:**
+```js
+let _injectionTimeout = null;
+function debouncedInjection() {
+  if (_injectionTimeout) clearTimeout(_injectionTimeout);
+  _injectionTimeout = setTimeout(() => {
+    tryInjectButtons();
+  }, 100);
+}
+```
+
+**Navigation hooks:**
+- Intercept `history.pushState`, `history.replaceState`, and `popstate` events
+- Schedule multiple injection attempts (100ms, 500ms, 1200ms) for variable render times
+- Track page transition state to block downloads during navigation
+- Clear revision cache when changing songs (but preserve for Tab/Chords toggle)
+
+#### Section 7 — Error Handling & Logging
+
+**Improved error filtering:**
+Only filters known benign errors (`AudioContext`, `source-map`, etc.) while preserving Songsterr and script-related errors for debugging.
+
+**Comprehensive logging system:**
+```js
+function sgdLog(level, source, message, data) {
+  // Structured logging with source tagging
+}
+```
+
+Silent `try/catch` blocks now log warnings instead of swallowing errors silently, making debugging much easier.
+
+#### Section 8 — The GP7/MIDI Downloader
 
 This is where the magic happens! Inspired by Metaphysics0's approach:
 
-**Step 1:** Read song metadata from the same `<script id="state">` element
-**Step 2:** Fetch track data from Songsterr's CloudFront CDN using Chrome headers
+**Step 1:** Read song metadata from the same `<script id="state">` element (with API fallback when DOM is stale)
+**Step 2:** Fetch track data from Songsterr's CloudFront CDN using Chrome headers via `GM_xmlhttpRequest` (bypasses CORS)
 **Step 3:** Convert to alphaTab's internal model with precise mappings
 **Step 4:** Export to GP7 or MIDI formats
 
@@ -146,13 +200,29 @@ This is where the magic happens! Inspired by Metaphysics0's approach:
 | **Instrument ID** | Internal ID → GM program (0-127) |
 | **Percussion** | MIDI note → alphaTab articulation index |
 
-#### Section 6 — Button Injection & SPA Resilience
+**CDN Strategy:**
+- Primary: `dqsljvtekg760.cloudfront.net`
+- Fallback: `d3d3l6a6rcgkaf.cloudfront.net`
+- API cache fallback when both CDNs fail
+- Full Chrome 124 headers for authentication
 
-Songsterr is a React SPA. Navigation between pages destroys our injected buttons. We handle this with:
+#### Section 9 — Button Injection
 
-1. **Permanent MutationObserver** — Re-injects if our buttons disappear
-2. **History API hooks** — Detects React Router navigation
-3. **Multiple fallback selectors** — Handles Songsterr updates gracefully
+**Injection target:**
+```html
+<div id="c-export" class="B3a4pa B3agq5">   ← replaced entirely
+  <button id="control-export" title="Download tab">Export</button>
+</div>
+```
+
+We replace the `#c-export` div with our `#sgd-wrapper`, inheriting the same CSS classes for perfect alignment.
+
+**Three fallback selectors** for Songsterr updates:
+1. `#c-export` — stable element ID (primary)
+2. `#control-export`'s parent div
+3. Any element with `[title*="Download tab"]` or `[data-id*="Export"]`
+
+**Permanent `MutationObserver`** re-injects if our buttons disappear after React re-renders.
 
 ---
 
@@ -200,7 +270,7 @@ If you use Songsterr regularly, please consider supporting the developers with a
 
 ## 📝 Version History
 
-- **v3.2.1** — Optimized performance, added memory management, improved error handling
+- **v4.0.0** — Major version: Debug logging system, memory management, SPA navigation improvements, robust fetch hook protection
 - **v3.2.0** — Integrated パプリカ's YouTube Audio-Only and Autoscroll fixes
 - **v3.0.x** — Initial GP7/MIDI downloader with Plus unlock
 

@@ -145,7 +145,7 @@
   logToggleObserver.observe(document.documentElement, { childList: true, subtree: true });
 
   // Initial log
-  console.log('🎸 Songsterr Ultimate — Active v3.2.1 (Optimized)', loggingEnabled ? '(Debug logging ON)' : '');
+  console.log('🎸 Songsterr Ultimate — Active v4.0.0', loggingEnabled ? '(Debug logging ON)' : '');
 
   // Replace all console.log throughout the script with sgdLog
   // (This will be done via find/replace in subsequent edits)
