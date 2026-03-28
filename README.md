@@ -1,5 +1,12 @@
 # 🎸 Songsterr Ultimate (v3.2.1)
 
+## ⚠️ ATTENTION – READ THIS BEFORE ANY DOWNLOAD
+
+```diff
+- ALWAYS refresh / reload the page before clicking any "Download MIDI" or "Download Guitar Pro" button
+- Otherwise you will get the file from the VERY FIRST tab you opened — NOT the one currently displayed
+```
+
 > **A Tampermonkey userscript that unlocks all Songsterr Plus features and replaces the native export button with high-quality Guitar Pro 7 (.gp) and MIDI (.mid) downloaders built on alphaTab.**
 
 ---
